@@ -1,0 +1,269 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+from threading import Thread, Lock, Semaphore
+import time
+import random
+
+# --------------------- GUI SETUP ---------------------
+root = tk.Tk()
+root.title("Semaphore Simulations")
+root.geometry("1200x600")
+
+# Frames
+control_frame = tk.Frame(root, padx=10, pady=10)
+control_frame.pack(side=tk.TOP, fill=tk.X)
+
+visual_frame = tk.Frame(root, padx=10, pady=10)
+visual_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+info_frame = tk.Frame(root, padx=10, pady=10)
+info_frame.pack(side=tk.RIGHT, fill=tk.Y)
+
+# Info legend
+tk.Label(info_frame, text="LEGEND", font=("Arial", 14, "bold")).pack()
+legend = {
+    "thinking": "lightblue",
+    "hungry": "yellow",
+    "eating": "green",
+    "waiting": "orange",
+    "sleeping": "gray",
+    "serving": "purple",
+    "producing": "pink",
+    "consuming": "red"
+}
+for state, color in legend.items():
+    tk.Label(info_frame, text=f"{state.capitalize()}", bg=color, width=15).pack(pady=2)
+
+# Status panel
+tk.Label(info_frame, text="STATUS", font=("Arial", 14, "bold")).pack(pady=(10,0))
+status_box = scrolledtext.ScrolledText(info_frame, width=30, height=25, state='disabled', wrap=tk.WORD)
+status_box.pack()
+
+def update_status(entity, state):
+    status_box.config(state='normal')
+    status_box.insert(tk.END, f"{entity} is {state}\n")
+    status_box.see(tk.END)
+    status_box.config(state='disabled')
+
+# --------------------- CONTROL OPTIONS ---------------------
+tk.Label(control_frame, text="Choose Simulation:").grid(row=0, column=0)
+sim_choice = ttk.Combobox(control_frame, values=["Producer-Consumer", "Sleeping Barber", "Dining Philosophers"])
+sim_choice.grid(row=0, column=1)
+sim_choice.current(0)
+
+tk.Label(control_frame, text="Number of Customers/Philosophers:").grid(row=1, column=0)
+num_customers = tk.IntVar(value=5)
+tk.Entry(control_frame, textvariable=num_customers).grid(row=1, column=1)
+
+tk.Label(control_frame, text="Number of Seats/Forks/Plates:").grid(row=2, column=0)
+num_resources = tk.IntVar(value=5)
+tk.Entry(control_frame, textvariable=num_resources).grid(row=2, column=1)
+
+tk.Label(control_frame, text="Simulation Speed:").grid(row=3, column=0)
+speed_var = tk.DoubleVar(value=1.5)
+speed_slider = tk.Scale(control_frame, from_=0.5, to=5.0, resolution=0.1,
+                        orient=tk.HORIZONTAL, variable=speed_var)
+speed_slider.grid(row=3, column=1)
+
+start_btn = tk.Button(control_frame, text="Start Simulation")
+start_btn.grid(row=4, column=0, columnspan=2, pady=10)
+
+# --------------------- VISUALIZATION ---------------------
+canvas = tk.Canvas(visual_frame, width=700, height=500, bg="white")
+canvas.pack(fill=tk.BOTH, expand=True)
+
+# Global threads control
+threads = []
+
+# --------------------- SIMULATIONS ---------------------
+def producer_consumer(n_producers, n_consumers, buffer_size):
+    buffer = []
+    mutex = Lock()
+    empty = Semaphore(buffer_size)
+    full = Semaphore(0)
+
+    producer_y = 50
+    consumer_y = 200
+
+    def draw_state():
+        canvas.delete("all")
+        canvas.create_text(350, 10, text=f"Buffer: {buffer}", font=("Arial", 12))
+        for i in range(n_producers):
+            color = "pink" if f"item{i+1}" in buffer else "lightblue"
+            canvas.create_rectangle(50 + i*50, producer_y, 90 + i*50, producer_y+50, fill=color)
+            canvas.create_text(70 + i*50, producer_y+25, text=f"P{i+1}")
+        for i in range(n_consumers):
+            color = "red" if buffer else "lightblue"
+            canvas.create_rectangle(50 + i*50, consumer_y, 90 + i*50, consumer_y+50, fill=color)
+            canvas.create_text(70 + i*50, consumer_y+25, text=f"C{i+1}")
+        root.update()
+
+    def producer(i):
+        nonlocal buffer
+        while True:
+            update_status(f"P{i+1}", "producing")
+            time.sleep(random.uniform(1,2) * speed_var.get())
+            empty.acquire()
+            mutex.acquire()
+            buffer.append(f"item{i+1}")
+            draw_state()
+            mutex.release()
+            full.release()
+            update_status(f"P{i+1}", "waiting")
+
+    def consumer(i):
+        nonlocal buffer
+        while True:
+            update_status(f"C{i+1}", "waiting to consume")
+            full.acquire()
+            mutex.acquire()
+            if buffer:
+                buffer.pop(0)
+            draw_state()
+            mutex.release()
+            empty.release()
+            update_status(f"C{i+1}", "consumed")
+
+    for i in range(n_producers):
+        t = Thread(target=producer, args=(i,))
+        t.daemon = True
+        t.start()
+        threads.append(t)
+    for i in range(n_consumers):
+        t = Thread(target=consumer, args=(i,))
+        t.daemon = True
+        t.start()
+        threads.append(t)
+
+def sleeping_barber(n_customers, n_chairs):
+    waiting = []
+    mutex = Lock()
+    customers = Semaphore(0)
+    barber = Semaphore(0)
+    barber_sleeping = True
+
+    barber_x, barber_y = 350, 50
+    chair_x, chair_y = 50, 200
+
+    def draw_state():
+        canvas.delete("all")
+        color = "gray" if barber_sleeping else "purple"
+        canvas.create_rectangle(barber_x, barber_y, barber_x+50, barber_y+50, fill=color)
+        canvas.create_text(barber_x+25, barber_y+25, text="Barber")
+        for i in range(n_chairs):
+            c = "orange" if i < len(waiting) else "lightblue"
+            canvas.create_rectangle(chair_x + i*60, chair_y, chair_x + i*60 +50, chair_y+50, fill=c)
+            if i < len(waiting):
+                canvas.create_text(chair_x + i*60 +25, chair_y+25, text=f"C{waiting[i]+1}")
+        root.update()
+
+    def barber_thread():
+        nonlocal barber_sleeping
+        while True:
+            update_status("Barber", "sleeping" if barber_sleeping else "serving")
+            customers.acquire()
+            mutex.acquire()
+            barber_sleeping = False
+            cust = waiting.pop(0)
+            draw_state()
+            update_status(f"C{cust+1}", "getting haircut")
+            mutex.release()
+            barber.release()
+            time.sleep(random.uniform(2,3) * speed_var.get())
+            barber_sleeping = True
+            draw_state()
+            update_status("Barber", "sleeping")
+
+    def customer_thread(i):
+        while True:
+            time.sleep(random.uniform(1,4) * speed_var.get())
+            mutex.acquire()
+            if len(waiting) < n_chairs:
+                waiting.append(i)
+                draw_state()
+                update_status(f"C{i+1}", "waiting")
+                mutex.release()
+                customers.release()
+                barber.acquire()
+                update_status(f"C{i+1}", "done haircut")
+            else:
+                update_status(f"C{i+1}", "left (no chair)")
+                mutex.release()
+
+    t_barber = Thread(target=barber_thread)
+    t_barber.daemon = True
+    t_barber.start()
+    threads.append(t_barber)
+
+    for i in range(n_customers):
+        t = Thread(target=customer_thread, args=(i,))
+        t.daemon = True
+        t.start()
+        threads.append(t)
+
+def dining_philosophers(n_philosophers):
+    forks = [Lock() for _ in range(n_philosophers)]
+    states = ["thinking"]*n_philosophers
+    canvas_y = 250
+    canvas_x = 150
+
+    def draw_state():
+        canvas.delete("all")
+        for i in range(n_philosophers):
+            color = legend[states[i]]
+            canvas.create_oval(canvas_x + i*70, canvas_y, canvas_x + i*70+50, canvas_y+50, fill=color)
+            canvas.create_text(canvas_x + i*70 +25, canvas_y+25, text=f"P{i+1}")
+        root.update()
+
+    def philosopher(i):
+        while True:
+            states[i] = "thinking"
+            update_status(f"P{i+1}", "thinking")
+            draw_state()
+            time.sleep(random.uniform(2,4) * speed_var.get())
+            states[i] = "hungry"
+            update_status(f"P{i+1}", "hungry")
+            draw_state()
+            left = forks[i]
+            right = forks[(i+1)%n_philosophers]
+            with left, right:
+                states[i] = "eating"
+                update_status(f"P{i+1}", "eating")
+                draw_state()
+                time.sleep(random.uniform(2,3) * speed_var.get())
+
+    for i in range(n_philosophers):
+        t = Thread(target=philosopher, args=(i,))
+        t.daemon = True
+        t.start()
+        threads.append(t)
+
+# --------------------- START SIMULATION ---------------------
+def start_sim():
+    global threads
+    # Clear previous visualization and status
+    canvas.delete("all")
+    status_box.config(state='normal')
+    status_box.delete(1.0, tk.END)
+    status_box.config(state='disabled')
+    
+    # Stop any previous threads (threads will still run in background as daemon)
+    threads.clear()
+
+    choice = sim_choice.get()
+    n = num_customers.get()
+    r = num_resources.get()
+
+    if choice == "Producer-Consumer":
+        producer_consumer(n, n, r)
+    elif choice == "Sleeping Barber":
+        sleeping_barber(n, r)
+    elif choice == "Dining Philosophers":
+        dining_philosophers(n)
+
+# Connect start button
+start_btn.config(command=start_sim)
+
+# Start GUI loop
+root.mainloop()
+
